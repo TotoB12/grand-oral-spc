@@ -5,6 +5,10 @@ import time
 import datetime # Needed for formatting ETA
 import numba # << ADDED for performance optimization (optional but recommended)
 
+# --- [ Previous code Sections I to IV remain unchanged ] ---
+# ... (Constants, Planet Data, Simulation Setup, Initial Conditions) ...
+# Make sure PLANET_NAMES, SIMULATION_YEARS, TIME_STEP_DAYS, PERTURB_PLANET, etc. are defined here.
+
 print("-----------------------------------------------------")
 print(" Grand Oral SPC - Solar System Chaos Demonstration ")
 print("-----------------------------------------------------")
@@ -17,7 +21,7 @@ print("   - Simulation 1: Based on standard initial conditions.")
 print("   - Simulation 2: Identical, EXCEPT for a minuscule perturbation")
 print("     applied to the starting position of one planet (Mercury).")
 print("3. Integrate the orbits over a long period (thousands of years).")
-print("4. Plot the final trajectories of both simulations to visualize divergence.")
+print("4. Plot INITIAL orbits (short duration) and FINAL positions to visualize divergence.") # << Updated Methodology
 print("\nKey Concept: Deterministic Chaos")
 print("   The laws of physics (Newton's gravity) are deterministic.")
 print("   However, due to complex interactions (N >= 3 bodies),")
@@ -33,8 +37,6 @@ DAY = 60 * 60 * 24  # Seconds in a day
 YEAR = 365.25 * DAY # Seconds in a year (Julian year)
 
 # --- II. Planet Data ---
-# Format: [Mass (kg), Semi-major axis (AU), Orbital Period (years - for reference), Color]
-# Using simplified initial conditions: circular orbits, starting aligned on x-axis.
 M_SUN = 1.9885e30 # Mass of Sun (kg)
 planet_raw_data = {
     # Name      Mass (kg)   Dist (AU) Period(yr) Color
@@ -58,14 +60,15 @@ PERTURB_PLANET = 'Mercury'
 # This represents the unavoidable uncertainty in measurements.
 PERTURB_FACTOR = 1.00000001 # 1 + 1e-8
 
-# --- Progress Update Frequency ---
-# Update progress indicator every N steps to avoid excessive printing/calculation overhead
-PROGRESS_UPDATE_INTERVAL = 1000 # Update progress every 1000 steps
+PROGRESS_UPDATE_INTERVAL = 1000
 
-# --- MEMORY FIX: Trajectory Downsampling ---
-# Instead of storing every step, store position data only every N steps for plotting
-# This drastically reduces memory usage.
-PLOT_SAMPLE_RATE = 1000 # Store data for plotting every 1000 simulation steps
+# --- NEW: Setup for Initial Orbit Plotting ---
+INITIAL_ORBIT_PLOT_YEARS = 2 # How many years of the initial orbit to show
+PLOT_SAMPLE_RATE = 100 # Store data more frequently initially if needed for smooth initial orbit plot
+                       # Recalculate if needed based on TIME_STEP_DAYS
+                       # Let's keep PLOT_SAMPLE_RATE relatively low (e.g., 100-1000)
+                       # to have enough points for the initial orbit plot.
+                       # If INITIAL_ORBIT_PLOT_YEARS is small, PLOT_SAMPLE_RATE can be smaller.
 
 print("\nSimulation Configuration:")
 print(f"  Planets Included: {', '.join(PLANET_NAMES)}")
@@ -73,6 +76,7 @@ print(f"  Simulation Duration: {SIMULATION_YEARS} years")
 print(f"  Time Step: {TIME_STEP_DAYS} days")
 print(f"  Perturbed Planet: {PERTURB_PLANET}")
 print(f"  Perturbation Factor (x-pos): {PERTURB_FACTOR:.10f}")
+print(f"  Plotting Initial Orbit Duration: {INITIAL_ORBIT_PLOT_YEARS} years") # << Info
 print(f"  Plotting Trajectory Sample Rate: 1 point per {PLOT_SAMPLE_RATE} steps") # << Info
 print("-----------------------------------------------------")
 
@@ -127,180 +131,124 @@ print(f"  Perturbed x-position: {perturbed_pos / AU:.10f} AU")
 print(f"  Initial difference: {pos_diff_m:.3f} meters ({pos_diff_m / 1000:.3f} km)")
 print("-----------------------------------------------------")
 
-# --- V. Physics and Integration ---
 
-# << SPEED OPTIMIZATION: Added Numba JIT compilation >>
-# The @numba.njit decorator compiles this function to machine code for speed.
-# 'fastmath=True' allows some potentially unsafe floating point optimizations,
-# often giving extra speed but use with caution if extreme precision is paramount.
-# 'cache=True' saves the compiled version to disk for faster subsequent runs.
+# --- V. Physics and Integration (Numba functions) ---
+# << Ensure the Numba functions calculate_accelerations and leapfrog_step are defined here >>
+# << (Copied from previous version - unchanged) >>
 @numba.njit(fastmath=True, cache=True)
 def calculate_accelerations(positions, masses, G_const):
-    """Calculates the acceleration on each body due to gravitational forces
-       from all other bodies. Uses N-body calculation."""
-    num_bodies_local = masses.shape[0] # Use shape[0] inside Numba function
-    accelerations = np.zeros_like(positions, dtype=np.float64) # Explicit float64
-
-    # Use Numba's prange for potential parallel execution of the outer loop
-    # Requires Numba >= 0.50 and careful handling of shared variables if any
-    # For simple accumulation like this, it's often safe.
-    # Remove 'parallel=True' if you encounter issues or don't have suitable hardware.
-    # for i in numba.prange(num_bodies_local): # << Potential parallelization
-    for i in range(num_bodies_local): # Standard sequential loop
+    num_bodies_local = masses.shape[0]
+    accelerations = np.zeros_like(positions, dtype=np.float64)
+    for i in range(num_bodies_local):
         for j in range(num_bodies_local):
-            if i == j:
-                continue # No self-gravity
-
-            # Vector from body i to body j
+            if i == j: continue
             r_vector = positions[j] - positions[i]
-            # Numba handles np.sum efficiently
             dist_sq = np.sum(r_vector**2)
-
-            # Avoid division by zero and excessive force at very close range
-            # Add a small softening factor (e.g., 1 meter squared) - optional
-            # softening_sq = 1.0
-            # dist = np.sqrt(dist_sq + softening_sq)
-            # if dist > 1e-3: # Check avoids sqrt(0)
-
-            # Check if distance is practically zero before sqrt
-            if dist_sq > 1e-6: # Avoid sqrt(small number) issues and division by zero
+            if dist_sq > 1e-6:
                 dist = np.sqrt(dist_sq)
-                # Force magnitude: G * m_i * m_j / dist^2
-                # Acceleration magnitude on i: G * m_j / dist^2
                 acceleration_magnitude = G_const * masses[j] / dist_sq
-                # Acceleration vector on i: magnitude * unit_vector (r_vector / dist)
                 accelerations[i] += acceleration_magnitude * (r_vector / dist)
-            # else:
-                # Handle potential close encounters if needed (e.g., log warning)
-                # Note: Numba doesn't support print directly in nopython mode easily
-                pass
-
     return accelerations
 
-# << SPEED OPTIMIZATION: Added Numba JIT compilation >>
 @numba.njit(fastmath=True, cache=True)
 def leapfrog_step(positions, velocities, masses, dt, G_const):
-    """Performs one step of the Leapfrog integration method (Kick-Drift-Kick)."""
-    # Kick 1 (Update velocities by half step)
-    # Pass G explicitly as Numba compiles functions separately
     initial_accelerations = calculate_accelerations(positions, masses, G_const)
     velocities += 0.5 * initial_accelerations * dt
-    # Drift (Update positions by full step using new velocities)
     positions += velocities * dt
-    # Kick 2 (Update velocities by another half step using new positions)
     final_accelerations = calculate_accelerations(positions, masses, G_const)
     velocities += 0.5 * final_accelerations * dt
-    # Numba functions should return the modified arrays explicitly if needed elsewhere,
-    # but here modification happens in-place, which is fine.
-    # return positions, velocities # Not strictly needed if modified in-place
+    # In-place modification, no return needed within loop
+
 
 # --- VI. Simulation Parameters ---
-DT = TIME_STEP_DAYS * DAY  # Time step in seconds
-TOTAL_TIME = SIMULATION_YEARS * YEAR # Total simulation time in seconds
+DT = TIME_STEP_DAYS * DAY
+TOTAL_TIME = SIMULATION_YEARS * YEAR
 NUM_STEPS = int(TOTAL_TIME / DT)
+
+# Calculate how many *sampled* steps correspond to the initial plot duration
+steps_per_year = YEAR / DT
+initial_orbit_plot_steps = int(INITIAL_ORBIT_PLOT_YEARS * steps_per_year)
+# Find the index in the *sampled* data array
+initial_orbit_plot_samples = int(initial_orbit_plot_steps / PLOT_SAMPLE_RATE) + 1 # +1 to include start
 
 print(f"\nSimulation Execution Details:")
 print(f"  Time step (dt): {DT:.2f} seconds ({TIME_STEP_DAYS} days)")
 print(f"  Total duration: {TOTAL_TIME:.2e} seconds ({SIMULATION_YEARS} years)")
 print(f"  Number of steps: {NUM_STEPS}")
 print(f"  Progress updates every {PROGRESS_UPDATE_INTERVAL} steps.")
-print(f"  Using Numba JIT compilation for speed: {'Yes' if numba.__version__ else 'No (Numba not found?)'}") # Check if Numba imported
+print(f"  Plotting initial trajectory for {INITIAL_ORBIT_PLOT_YEARS} years ({initial_orbit_plot_steps} steps, {initial_orbit_plot_samples} sampled points).")
+print(f"  Using Numba JIT compilation for speed: {'Yes' if numba.__version__ else 'No (Numba not found?)'}")
 print("\n--- Starting Simulation ---")
 print("(This will take several minutes, potentially less with Numba...)")
 
+
 # --- VII. Run Simulation ---
+plot_points_sim1 = [] # List to store sampled points for Sim 1 (Original)
+# No need to store full trajectory for Sim 2 for plotting anymore
 
-# << MEMORY FIX: Use lists to store downsampled trajectory points >>
-# Initialize lists to hold the position data for plotting
-plot_points_sim1 = []
-plot_points_sim2 = []
-
-# Initialize simulation states (use copies!)
 positions_sim1 = np.copy(initial_positions)
 velocities_sim1 = np.copy(initial_velocities)
 positions_sim2 = np.copy(initial_positions_perturbed)
 velocities_sim2 = np.copy(initial_velocities_perturbed)
 
-# Store initial states for plotting
+# Store initial state for plotting Sim 1's initial orbit
 plot_points_sim1.append(np.copy(positions_sim1))
-plot_points_sim2.append(np.copy(positions_sim2))
 
 start_time = time.time()
-last_update_time = start_time
-
-# --- Call Numba functions once to trigger compilation (optional, avoids slight delay on first step) ---
-# try:
-#     _ = leapfrog_step(positions_sim1, velocities_sim1, masses, DT, G)
-#     print("Numba functions compiled successfully.")
-# except Exception as e:
-#     print(f"Numba compilation might have failed: {e}")
-# # Reset positions/velocities if needed after test call (or just let the loop start)
-# positions_sim1 = np.copy(initial_positions)
-# velocities_sim1 = np.copy(initial_velocities)
-# ----------------------------------------------------------------------------------------------------
-
+# (Optional Numba compilation trigger can go here)
 
 for step in range(NUM_STEPS):
-    # Update Simulation 1 (Modify arrays in-place)
     leapfrog_step(positions_sim1, velocities_sim1, masses, DT, G)
-
-    # Update Simulation 2 (Modify arrays in-place)
     leapfrog_step(positions_sim2, velocities_sim2, masses, DT, G)
 
-    # --- MEMORY FIX: Store data point only periodically ---
     steps_done = step + 1
+    # Store data point for Sim 1's trajectory plot periodically
     if steps_done % PLOT_SAMPLE_RATE == 0:
-        plot_points_sim1.append(np.copy(positions_sim1))
-        plot_points_sim2.append(np.copy(positions_sim2))
+        # Only store if we are still within the initial orbit plotting phase
+        # Reduces memory slightly, though not the main bottleneck anymore
+        if steps_done <= initial_orbit_plot_steps + PLOT_SAMPLE_RATE: # Store a bit beyond needed steps just in case
+             plot_points_sim1.append(np.copy(positions_sim1))
+        # We don't need to store Sim 2 points for trajectory plotting
 
-    # --- Progress Indicator ---
+    # --- Progress Indicator (same as before) ---
     if steps_done % PROGRESS_UPDATE_INTERVAL == 0 or steps_done == NUM_STEPS:
         current_time = time.time()
         elapsed_total = current_time - start_time
-
         progress_pct = steps_done / NUM_STEPS * 100
         current_sim_year = (steps_done * DT) / YEAR
-
         eta_str = "Calculating..."
-        if progress_pct > 0.1 and elapsed_total > 1.0: # Calculate ETA once some time has passed
+        if progress_pct > 0.1 and elapsed_total > 1.0:
             time_per_step = elapsed_total / steps_done
             remaining_steps = NUM_STEPS - steps_done
             eta_seconds = time_per_step * remaining_steps
             eta_formatted = str(datetime.timedelta(seconds=int(eta_seconds)))
             eta_str = f"ETA: {eta_formatted}"
-
         elapsed_formatted = str(datetime.timedelta(seconds=int(elapsed_total)))
         status_line = (f"  Progress: {progress_pct:5.1f}% | Year: {current_sim_year:6.0f}/{SIMULATION_YEARS} "
                        f"| Elapsed: {elapsed_formatted} | {eta_str}")
         print(status_line.ljust(80), end='\r')
 
-        last_update_time = current_time
-
-# --- Ensure the very last state is captured for plotting if not sampled ---
-if NUM_STEPS % PLOT_SAMPLE_RATE != 0:
-     plot_points_sim1.append(np.copy(positions_sim1))
-     plot_points_sim2.append(np.copy(positions_sim2))
-
+# The final positions are stored in positions_sim1 and positions_sim2
 
 end_time = time.time()
 total_duration_seconds = end_time - start_time
-print("\n\n--- Simulation Complete ---") # Newlines to move past the progress indicator
+print("\n\n--- Simulation Complete ---")
 print(f"Total calculation time: {total_duration_seconds:.2f} seconds ({str(datetime.timedelta(seconds=int(total_duration_seconds)))}).")
 print("-----------------------------------------------------")
 
 # --- VIII. Post-Processing and Visualization ---
 print("\nProcessing results for visualization...")
 
-# << MEMORY FIX: Convert the collected plot points (lists) into NumPy arrays >>
-# Shape will be (num_plot_points, num_bodies, 2) for each simulation
+# Convert the collected plot points for Sim 1's initial orbit into a NumPy array
 plot_trajectory_sim1_m = np.array(plot_points_sim1)
-plot_trajectory_sim2_m = np.array(plot_points_sim2)
+# Ensure we only take the number of samples needed for the initial orbit plot
+num_samples_to_plot = min(initial_orbit_plot_samples, plot_trajectory_sim1_m.shape[0])
+plot_trajectory_sim1_m = plot_trajectory_sim1_m[:num_samples_to_plot]
 
-# Convert sampled trajectories from meters to Astronomical Units (AU) for plotting
+# Convert sampled initial trajectory from meters to AU
 plot_trajectory_sim1_au = plot_trajectory_sim1_m / AU
-plot_trajectory_sim2_au = plot_trajectory_sim2_m / AU
 
-# The final positions are simply the last calculated states
+# Final positions are the last calculated states
 final_pos_sim1_m = positions_sim1
 final_pos_sim2_m = positions_sim2
 
@@ -315,18 +263,20 @@ final_difference_vector = final_pos_pert_sim2 - final_pos_pert_sim1
 final_distance_au = np.linalg.norm(final_difference_vector)
 final_distance_km = final_distance_au * AU / 1000
 
+# --- Analysis Printout (same as before) ---
 print(f"\nAnalysis of Results ({PERTURB_PLANET}):")
 print(f"  Initial position difference: {pos_diff_m:.3f} meters")
-print(f"  Final position (Sim 1): [{final_pos_pert_sim1[0]:.4f}, {final_pos_pert_sim1[1]:.4f}] AU")
-print(f"  Final position (Sim 2): [{final_pos_pert_sim2[0]:.4f}, {final_pos_pert_sim2[1]:.4f}] AU")
+print(f"  Final position (Sim 1 - Original): [{final_pos_pert_sim1[0]:.4f}, {final_pos_pert_sim1[1]:.4f}] AU")
+print(f"  Final position (Sim 2 - Perturbed): [{final_pos_pert_sim2[0]:.4f}, {final_pos_pert_sim2[1]:.4f}] AU")
 print(f"  Final separation distance: {final_distance_au:.4f} AU")
 print(f"                         = {final_distance_km:,.0f} km")
 print(f"\nConclusion: An initial difference of meters grew to ~{final_distance_km:,.0f} km over {SIMULATION_YEARS} years!")
 print("This demonstrates the extreme sensitivity to initial conditions characteristic of chaos.")
 print("-----------------------------------------------------")
 
-# --- IX. Plotting ---
-print("Generating plot...")
+
+# --- IX. Plotting (REVISED) ---
+print("Generating plot (Initial Orbits + Final Positions)...")
 fig, ax = plt.subplots(figsize=(12, 12))
 ax.set_aspect('equal')
 ax.grid(True, linestyle='--', alpha=0.5, color='gray')
@@ -335,9 +285,8 @@ ax.set_ylabel("Distance (AU)")
 ax.set_facecolor('black')
 fig.patch.set_facecolor('black')
 
-# Plot title and info
 plot_title = (f"Solar System Chaos Demo ({SIMULATION_YEARS} years)\n"
-              f"Sensitivity to Initial Conditions ({PERTURB_PLANET} perturbed by factor {PERTURB_FACTOR:.10f})") # Show factor precision
+              f"Sensitivity to Initial Conditions ({PERTURB_PLANET} perturbed by factor {PERTURB_FACTOR:.10f})")
 fig.suptitle(plot_title, fontsize=14, color='white')
 ax.set_title(f"Final Separation of {PERTURB_PLANET}: {final_distance_au:.3f} AU ({final_distance_km:,.0f} km)",
              fontsize=10, color='cyan')
@@ -353,45 +302,81 @@ ax.spines['top'].set_color('white')
 ax.spines['right'].set_color('white')
 ax.spines['left'].set_color('white')
 
-# Plot trajectories (using downsampled data) and final positions
+# --- Plot Initial Orbits (Sim 1 only) and Final Positions ---
+legend_handles = [] # For creating a custom legend later
+
 for i in range(num_bodies):
-    # Simulation 1 (Original) - Solid lines, larger final marker
-    # << PLOTTING FIX: Use the downsampled trajectory data >>
-    ax.plot(plot_trajectory_sim1_au[:, i, 0], plot_trajectory_sim1_au[:, i, 1],
-            '-', color=colors[i], lw=0.5, alpha=0.7, # Thinner line for potentially many points
-            label=f"{PLANET_NAMES[i]} (Orig)" if i != perturb_index else f"{PLANET_NAMES[i]} (Orig - Solid)")
+    planet_name = PLANET_NAMES[i]
+    planet_color = colors[i]
 
-    # Plot final position using the accurately stored final state
-    ax.plot(final_pos_sim1_au[i, 0], final_pos_sim1_au[i, 1],
-            'o', color=colors[i], markersize=9 if i==0 else 6, markeredgecolor='white', mew=0.5)
+    # 1. Plot Initial Orbit Segment (Sim 1 - Original)
+    # Use a slightly thicker line for the initial orbit to make it clear
+    line, = ax.plot(plot_trajectory_sim1_au[:, i, 0], plot_trajectory_sim1_au[:, i, 1],
+                    '-', color=planet_color, lw=1.0, alpha=0.9, # Solid line for original initial orbit
+                    label=f"{planet_name} Initial Orbit ({INITIAL_ORBIT_PLOT_YEARS} yrs)")
+    if i == 0: # Add Sun label to legend handles
+        legend_handles.append(line)
+    elif i == perturb_index: # Special label for perturbed planet's initial orbit
+        legend_handles.append(line) # Add to legend
+    elif i > 0 : # Add other planets
+         legend_handles.append(line)
 
-    # Simulation 2 (Perturbed) - Dashed lines, smaller final marker (only for planets)
-    if i > 0: # Don't plot perturbed Sun trajectory (it barely moves anyway)
-        # << PLOTTING FIX: Use the downsampled trajectory data >>
-        ax.plot(plot_trajectory_sim2_au[:, i, 0], plot_trajectory_sim2_au[:, i, 1],
-                '--', color=colors[i], lw=0.5, alpha=0.6, # Thinner line
-                label=f"{PLANET_NAMES[i]} (Perturbed)" if i == perturb_index else None) # Label only perturbed planet
 
-        # Plot final position using the accurately stored final state
-        ax.plot(final_pos_sim2_au[i, 0], final_pos_sim2_au[i, 1],
-                's', color=colors[i], markersize=4, alpha=0.9) # Use squares for perturbed final pos
+    # 2. Plot Final Position (Sim 1 - Original)
+    # Use large markers for final positions
+    marker_size = 10 if i == 0 else 7 # Larger marker for Sun
+    final_marker1, = ax.plot(final_pos_sim1_au[i, 0], final_pos_sim1_au[i, 1],
+                             'o', color=planet_color, markersize=marker_size,
+                             markeredgecolor='white', mew=1.0, # Clear edge
+                             label=f"{planet_name} Final (Orig)")
+    # Add only one representative marker type to legend later
 
-# Add an arrow pointing between the final positions of the perturbed planet
+
+    # 3. Plot Final Position (Sim 2 - Perturbed) - Only for planets
+    if i > 0: # Don't plot perturbed Sun final position (it's virtually identical)
+        final_marker2, = ax.plot(final_pos_sim2_au[i, 0], final_pos_sim2_au[i, 1],
+                                 'X', color=planet_color, markersize=marker_size, # Use 'X' marker for perturbed
+                                 markeredgecolor='cyan', mew=1.0, # Different edge color
+                                 label=f"{planet_name} Final (Pert.)")
+        # Add only one representative marker type to legend later
+
+
+# --- Add Arrow for Perturbed Planet's Divergence ---
 ax.annotate('', xy=final_pos_pert_sim2, xytext=final_pos_pert_sim1,
-            arrowprops=dict(arrowstyle='<->', color='cyan', lw=1.5, shrinkA=5, shrinkB=5)) # Add shrink to avoid overlap
+            arrowprops=dict(arrowstyle='<->', color='cyan', lw=2.0, shrinkA=5, shrinkB=5)) # Thicker arrow
 
-ax.legend(loc='upper right', fontsize='small', facecolor='dimgray', edgecolor='white', labelcolor='white')
-plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to prevent title overlap
+# --- Create a Cleaner Legend ---
+# Add representative markers to the legend handles
+# We find the handles created by the plotting above
+# Example: Add markers for Original (circle) and Perturbed (X) final positions
+from matplotlib.lines import Line2D
+legend_elements = [
+    Line2D([0], [0], color='white', lw=1, label=f'Initial Orbit ({INITIAL_ORBIT_PLOT_YEARS} yrs)'),
+    Line2D([0], [0], marker='o', color='gray', label='Final Pos (Orig)', # Use gray as neutral marker color
+           markerfacecolor='gray', markersize=8, markeredgecolor='white', mew=1.0, linestyle='None'),
+    Line2D([0], [0], marker='X', color='gray', label='Final Pos (Pert.)', # Use gray as neutral marker color
+           markerfacecolor='gray', markersize=8, markeredgecolor='cyan', mew=1.0, linestyle='None'),
+    Line2D([0], [0], color='cyan', lw=1.5, label=f'{PERTURB_PLANET} Final Separation')
+]
+# Add planet colors
+for i in range(num_bodies):
+     legend_elements.append(Line2D([0], [0], color=colors[i], lw=2, label=PLANET_NAMES[i]))
 
-# << SAVE PLOT: Save the figure before showing it >>
-plot_filename = "solar_system_chaos_demonstration.png"
+
+ax.legend(handles=legend_elements, loc='upper right', fontsize='small',
+          facecolor='dimgray', edgecolor='white', labelcolor='white')
+
+plt.tight_layout(rect=[0, 0.03, 1, 0.93]) # Adjust rect to ensure suptitle fits
+
+# --- Save Plot ---
+plot_filename = "solar_system_chaos_demonstration_v2.png"
 try:
     plt.savefig(plot_filename, dpi=300, facecolor=fig.get_facecolor(), bbox_inches='tight')
     print(f"\nPlot saved as '{plot_filename}'")
 except Exception as e:
     print(f"\nError saving plot: {e}")
 
-# << Display the plot >>
+# --- Display Plot ---
 print("Displaying plot window...")
 plt.show()
 
