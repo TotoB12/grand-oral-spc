@@ -2,6 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+import datetime # Needed for formatting ETA
 
 print("-----------------------------------------------------")
 print(" Grand Oral SPC - Solar System Chaos Demonstration ")
@@ -41,7 +42,7 @@ planet_raw_data = {
     'Venus':   [4.8675e24,  0.723,    0.615,     'orange'],
     'Earth':   [5.9724e24,  1.0,      1.0,       'blue'],
     'Mars':    [6.4171e23,  1.524,    1.881,     'red'],
-    # Optional: Add Jupiter for more interactions, but increases calculation time
+    # Optional: Add Jupiter for more interactions, but increases calculation time significantly
     # 'Jupiter': [1.8982e27,  5.204,    11.86,     'tan'],
 }
 
@@ -55,6 +56,10 @@ PERTURB_PLANET = 'Mercury'
 # Apply a tiny perturbation (1 part in 100 million) to the initial x-position
 # This represents the unavoidable uncertainty in measurements.
 PERTURB_FACTOR = 1.00000001 # 1 + 1e-8
+
+# --- Progress Update Frequency ---
+# Update progress indicator every N steps to avoid excessive printing/calculation overhead
+PROGRESS_UPDATE_INTERVAL = 1000 # Update progress every 1000 steps
 
 print("\nSimulation Configuration:")
 print(f"  Planets Included: {', '.join(PLANET_NAMES)}")
@@ -168,13 +173,13 @@ print(f"\nSimulation Execution Details:")
 print(f"  Time step (dt): {DT:.2f} seconds ({TIME_STEP_DAYS} days)")
 print(f"  Total duration: {TOTAL_TIME:.2e} seconds ({SIMULATION_YEARS} years)")
 print(f"  Number of steps: {NUM_STEPS}")
+print(f"  Progress updates every {PROGRESS_UPDATE_INTERVAL} steps.")
 print("\n--- Starting Simulation ---")
 print("(This will take several minutes...)")
 
 # --- VII. Run Simulation ---
-# Allocate memory for trajectories (store every N steps to save memory if needed, but here we store all)
+# Allocate memory for trajectories
 # Shape: (simulation_index, time_step, body_index, coordinate_index)
-# We only need the final state and the full trajectory for plotting
 trajectories = np.zeros((2, NUM_STEPS + 1, num_bodies, 2)) # Sim 1 & Sim 2
 
 # Initialize simulation states
@@ -188,6 +193,8 @@ trajectories[0, 0] = positions_sim1
 trajectories[1, 0] = positions_sim2
 
 start_time = time.time()
+last_update_time = start_time
+
 for step in range(NUM_STEPS):
     # Update Simulation 1
     positions_sim1, velocities_sim1 = leapfrog_step(positions_sim1, velocities_sim1, masses, DT)
@@ -197,15 +204,38 @@ for step in range(NUM_STEPS):
     positions_sim2, velocities_sim2 = leapfrog_step(positions_sim2, velocities_sim2, masses, DT)
     trajectories[1, step + 1] = positions_sim2
 
-    # Progress Indicator (print every 1% or so)
-    if (step + 1) % (NUM_STEPS // 100) == 0:
-        progress = (step + 1) / NUM_STEPS * 100
-        elapsed = time.time() - start_time
-        print(f"  Progress: {progress:.0f}% complete | Time elapsed: {elapsed:.1f} s", end='\r')
+    # --- Progress Indicator ---
+    steps_done = step + 1
+    if steps_done % PROGRESS_UPDATE_INTERVAL == 0 or steps_done == NUM_STEPS:
+        current_time = time.time()
+        elapsed_total = current_time - start_time
+        # time_since_last = current_time - last_update_time # Optional: track time per interval
+
+        progress_pct = steps_done / NUM_STEPS * 100
+        current_sim_year = (steps_done * DT) / YEAR
+
+        eta_str = "Calculating..."
+        if progress_pct > 1: # Calculate ETA once some time has passed
+            time_per_step = elapsed_total / steps_done
+            remaining_steps = NUM_STEPS - steps_done
+            eta_seconds = time_per_step * remaining_steps
+            # Format ETA nicely
+            eta_formatted = str(datetime.timedelta(seconds=int(eta_seconds)))
+            eta_str = f"ETA: {eta_formatted}"
+
+        # Format elapsed time
+        elapsed_formatted = str(datetime.timedelta(seconds=int(elapsed_total)))
+
+        # Ensure the line overwrites previous progress update using \r and padding
+        status_line = (f"  Progress: {progress_pct:5.1f}% | Year: {current_sim_year:6.0f}/{SIMULATION_YEARS} "
+                       f"| Elapsed: {elapsed_formatted} | {eta_str}")
+        print(status_line.ljust(80), end='\r') # Pad with spaces to clear previous line
+
+        last_update_time = current_time # Update time for next interval calculation
 
 end_time = time.time()
-print(f"\n\n--- Simulation Complete ---")
-print(f"Total calculation time: {end_time - start_time:.2f} seconds.")
+print("\n\n--- Simulation Complete ---") # Newlines to move past the progress indicator
+print(f"Total calculation time: {end_time - start_time:.2f} seconds ({str(datetime.timedelta(seconds=int(end_time - start_time)))}).")
 print("-----------------------------------------------------")
 
 # --- VIII. Post-Processing and Visualization ---
@@ -247,7 +277,7 @@ fig.patch.set_facecolor('black')
 
 # Plot title and info
 plot_title = (f"Solar System Chaos Demo ({SIMULATION_YEARS} years)\n"
-              f"Sensitivity to Initial Conditions ({PERTURB_PLANET} perturbed by {PERTURB_FACTOR:.1e})")
+              f"Sensitivity to Initial Conditions ({PERTURB_PLANET} perturbed by factor {PERTURB_FACTOR})") # Corrected title reference
 fig.suptitle(plot_title, fontsize=14, color='white')
 ax.set_title(f"Final Separation of {PERTURB_PLANET}: {final_distance_au:.3f} AU ({final_distance_km:,.0f} km)",
              fontsize=10, color='cyan')
